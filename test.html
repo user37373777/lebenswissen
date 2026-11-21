@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Drive-Test">
+<title>Drive-Test</title>
+<style>
+:root{--bg:#eef1f4;--card:#fff;--ink:#1b2430;--mute:#5d6b7a;--line:#d5dce3;--acc:#2f6f8f;--onacc:#fff;--ok:#1f7a4d;--bad:#b3402f;--warn:#8a6a10}
+@media(prefers-color-scheme:dark){:root{--bg:#141a21;--card:#1d252e;--ink:#e6ebf0;--mute:#9aa8b6;--line:#2e3945;--acc:#6bb2d1;--onacc:#10171d;--ok:#6fcf9f;--bad:#e58a7a;--warn:#e0c060}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+.wrap{max-width:640px;margin:0 auto;padding:16px 16px 60px}
+h1{font:600 1.6rem/1.15 Georgia,serif;margin:4px 0 4px}
+.sub{color:var(--mute);font-size:.9rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-top:14px}
+#status{font-size:1.15rem;font-weight:600}
+#status.ok{color:var(--ok)}#status.bad{color:var(--bad)}#status.work{color:var(--warn)}
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:12px 14px;cursor:pointer;width:100%;margin-top:10px;text-align:left}
+button.pri{background:var(--acc);color:var(--onacc);border-color:var(--acc);font-weight:600}
+button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+button small{display:block;font-weight:400;opacity:.8}
+ul{list-style:none;margin:8px 0 0;padding:0;font-size:.88rem}
+li{padding:6px 0;border-top:1px solid var(--line);overflow-wrap:anywhere}
+li.ok b{color:var(--ok)}li.bad b{color:var(--bad)}
+h2{font:600 1.05rem system-ui;margin:0 0 4px}
+</style></head>
+<body><div class="wrap">
+<h1>Drive-Test</h1>
+<div class="sub">Test für Lebenswissen. Hier steht noch keine App, nur die Prüfung der Google-Drive-Verbindung.</div>
+
+<div class="card">
+<div id="status" class="work">Wird geladen …</div>
+<div class="sub" id="info" style="margin-top:6px"></div>
+<button class="pri" id="b1">1. Mit Google verbinden</button>
+<button id="b2">2. In Drive speichern und zurücklesen<small>Legt die Datei „lebenswissen-test.json“ in deinem Drive an und prüft sie.</small></button>
+<button id="b3">3. Ohne Antippen erneuern (Test)<small>Prüft, ob die Anmeldung ohne Rückfrage verlängert werden kann.</small></button>
+</div>
+
+<div class="card">
+<h2>Verlauf</h2>
+<div class="sub">Bleibt auf diesem Gerät gespeichert. Schick mir den Verlauf nach dem Test.</div>
+<ul id="log"></ul>
+<button id="b4">Verlauf leeren</button>
+</div>
+</div>
+
+<script>
+const CID='961602679752-sl8rds4vpjmrldvng74v2kprbqdarvc7.apps.googleusercontent.com';
+const SCOPE='https://www.googleapis.com/auth/drive.file';
+const FN='lebenswissen-test.json',LK='lw_test_log';
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let tc=null,tok=null,exp=0,pending=null;
+
+function getLog(){try{return JSON.parse(localStorage.getItem(LK))||[]}catch(e){return[]}}
+function log(m,k){const l=getLog();l.unshift({t:Date.now(),m,k:k||''});l.length=Math.min(l.length,40);try{localStorage.setItem(LK,JSON.stringify(l))}catch(e){}renderLog()}
+function renderLog(){$('log').innerHTML=getLog().map(e=>`<li class="${e.k}"><b>${new Date(e.t).toLocaleString('de-DE')}</b><br>${esc(e.m)}</li>`).join('')||'<li>Noch keine Einträge.</li>'}
+function setS(k,t){const s=$('status');s.className=k;s.textContent=t;info()}
+function ago(ms){const m=Math.round(ms/60000);if(m<1)return'gerade eben';if(m<90)return'vor '+m+' Minuten';const h=Math.round(m/60);if(h<48)return'vor '+h+' Stunden';return'vor '+Math.round(h/24)+' Tagen'}
+function info(){let ok=0;try{ok=Number(localStorage.getItem('lw_ok'))||0}catch(e){}
+ const app=(navigator.standalone||matchMedia('(display-mode: standalone)').matches);
+ $('info').textContent=(ok?'Letzte erfolgreiche Verbindung: '+ago(Date.now()-ok)+'. ':'Noch nie verbunden. ')+'Als Home-Bildschirm-App geöffnet: '+(app?'ja':'nein')+'.'}
+
+async function api(url,opt){
+ const r=await fetch(url,Object.assign({},opt,{headers:Object.assign({Authorization:'Bearer '+tok},(opt&&opt.headers)||{})}));
+ if(r.status===401){tok=null}
+ if(!r.ok)throw new Error('Google antwortete mit '+r.status+': '+(await r.text()).slice(0,160));
+ return r;
+}
+const needTok=()=>!tok||Date.now()>exp-30000;
+
+async function runTest(){
+ if(needTok()){pending=runTest;log('Berechtigung fehlt oder ist abgelaufen, hole eine neue …');try{tc.requestAccessToken()}catch(e){log('Fehler: '+e.message,'bad')}return}
+ setS('work','Test läuft …');
+ try{
+  const q=encodeURIComponent("name='"+FN+"' and trashed=false");
+  const list=await(await api('https://www.googleapis.com/drive/v3/files?spaces=drive&fields=files(id)&q='+q)).json();
+  let id=list.files[0]&&list.files[0].id,n=0;
+  if(id){const old=await(await api('https://www.googleapis.com/drive/v3/files/'+id+'?alt=media')).text();try{n=JSON.parse(old).zaehler||0}catch(e){}}
+  const content=JSON.stringify({zaehler:n+1,zeit:new Date().toISOString(),umlaut:'äöüß'});
+  if(id){await api('https://www.googleapis.com/upload/drive/v3/files/'+id+'?uploadType=media&fields=id',{method:'PATCH',headers:{'Content-Type':'application/json'},body:content})}
+  else{const b='lwb'+Date.now(),meta=JSON.stringify({name:FN,mimeType:'application/json'});
+   const body='--'+b+'\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+meta+'\r\n--'+b+'\r\nContent-Type: application/json\r\n\r\n'+content+'\r\n--'+b+'--';
+   const c=await(await api('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',{method:'POST',headers:{'Content-Type':'multipart/related; boundary='+b},body})).json();id=c.id}
+  const back=await(await api('https://www.googleapis.com/drive/v3/files/'+id+'?alt=media')).text();
+  if(back!==content)throw new Error('Der zurückgelesene Inhalt weicht ab.');
+  log('Test bestanden: In Drive gespeichert und unverändert zurückgelesen (Zähler '+(n+1)+').','ok');
+  setS('ok','Test bestanden. Drive hat die Datei bestätigt.');
+ }catch(e){log('Test fehlgeschlagen: '+e.message,'bad');setS('bad','Test fehlgeschlagen. Siehe Verlauf.')}
+}
+
+function init(){
+ tc=google.accounts.oauth2.initTokenClient({client_id:CID,scope:SCOPE,
+  callback:r=>{
+   if(r.error){log('Anmeldung fehlgeschlagen: '+r.error+(r.error_description?' ('+r.error_description+')':''),'bad');setS('bad','Nicht verbunden.');return}
+   if(!google.accounts.oauth2.hasGrantedAllScopes(r,SCOPE)){log('Die Drive-Berechtigung wurde nicht erteilt.','bad');setS('bad','Berechtigung fehlt.');return}
+   tok=r.access_token;exp=Date.now()+(Number(r.expires_in)||3600)*1000;
+   try{localStorage.setItem('lw_seen','1');localStorage.setItem('lw_ok',String(Date.now()))}catch(e){}
+   log('Verbunden. Berechtigung gilt etwa '+Math.round((exp-Date.now())/60000)+' Minuten.','ok');
+   setS('ok','Mit Google verbunden.');
+   if(pending){const f=pending;pending=null;f()}
+  },
+  error_callback:e=>{log('Anmeldefenster: '+(e.type||'Fehler')+(e.message?' ('+e.message+')':''),'bad');setS('bad','Nicht verbunden.')}});
+ let seen=false;try{seen=!!localStorage.getItem('lw_seen')}catch(e){}
+ setS('work','Bereit. Tippe auf „Mit Google verbinden“.');
+ if(seen){log('Automatischer Versuch beim Öffnen (ohne Antippen) …');try{tc.requestAccessToken({prompt:'none'})}catch(e){log('Fehler: '+e.message,'bad')}}
+}
+$('b1').onclick=()=>{try{tc.requestAccessToken()}catch(e){log('Fehler: '+e.message,'bad')}};
+$('b2').onclick=runTest;
+$('b3').onclick=()=>{log('Test: Erneuerung ohne Antippen …');try{tc.requestAccessToken({prompt:'none'})}catch(e){log('Fehler: '+e.message,'bad')}};
+$('b4').onclick=()=>{try{localStorage.removeItem(LK)}catch(e){}renderLog()};
+renderLog();info();
+let tries=0;(function wait(){if(window.google&&google.accounts&&google.accounts.oauth2){init();return}
+ if(++tries>50){setS('bad','Google-Anmeldung konnte nicht geladen werden. Internetverbindung prüfen.');log('Google-Skript nicht geladen.','bad');return}
+ setTimeout(wait,200)})();
+</script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+</body></html>
